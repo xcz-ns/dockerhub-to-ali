@@ -1,6 +1,16 @@
-nginx
-#支持私库
-k8s.gcr.io/kube-state-metrics/kube-state-metrics:v2.0.0
+youshandefeiyang/allinone:latest
+neosmemo/memos:latest
+dpanel/dpanel:lite
+vaultwarden/server:latest
+gdy666/lucky:latest
+alcapone1933/composerize:latest
 xhofe/alist:latest
-#支持指定架构
---platform=linux/arm64 xiaoyaliu/alist
+freediy/doube-itv:latest
+b3log/siyuan:latest
+finab/bark-server:latest
+hslr/sun-panel:latest
+vscodev/alipan-tv-auth:latest
+yidadaa/chatgpt-next-web:latest
+soulteary/flare:latest
+looby/aliyundrive-subscribe:latest
+containrrr/watchtower:latest
