@@ -15,4 +15,3 @@ yidadaa/chatgpt-next-web:latest
 soulteary/flare:latest
 looby/aliyundrive-subscribe:latest
 containrrr/watchtower:latest
-ghcr.io/sky22333/hub-proxy
