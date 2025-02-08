@@ -1,3 +1,4 @@
+nginx
 youshandefeiyang/allinone:latest
 neosmemo/memos:latest
 dpanel/dpanel:lite
