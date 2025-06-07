@@ -1,3 +1,4 @@
+jxxghp/moviepilot-v2:latest
 nginx
 youshandefeiyang/allinone:latest
 neosmemo/memos:latest
@@ -9,9 +10,7 @@ xhofe/alist:latest
 b3log/siyuan:latest
 finab/bark-server:latest
 hslr/sun-panel:latest
-vscodev/alipan-tv-auth:latest
 yidadaa/chatgpt-next-web:latest
 soulteary/flare:latest
 looby/aliyundrive-subscribe:latest
 containrrr/watchtower:latest
-jxxghp/moviepilot-v2:latest
