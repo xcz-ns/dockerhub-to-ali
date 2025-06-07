@@ -114,34 +114,26 @@ jobs:
         DURATION="${duration_min}分${duration_rem}秒"
 
         STATUS="${{ job.status }}"
-
-        MSG="<b>🧱 GitHub Actions Docker 构建任务</b>
-⏱️ 耗时：$DURATION
-📅 时间：$(date "+%Y-%m-%d %H:%M:%S")
-✅ 状态：$STATUS
-
-"
+        MSG="🧱 *GitHub Actions Docker 构建任务*\n"
+        MSG+="⏱️ 耗时：$DURATION\n"
+        MSG+="📅 时间：$(date "+%Y-%m-%d %H:%M:%S")\n"
+        MSG+="✅ 状态：$STATUS\n\n"
 
         if [ -s new_images_success.log ]; then
-          MSG+="<b>📦 成功推送的镜像：</b>
-"
+          MSG+="📦 *成功推送的镜像：*\n"
           while read -r line; do
-            MSG+="- $line
-"
+            MSG+="- $line\n"
           done < new_images_success.log
         fi
 
         if [ -s new_images_failed.log ]; then
-          MSG+="
-<b>🚫 失败的镜像（构建/推送失败）：</b>
-"
+          MSG+="\n🚫 *失败的镜像（构建/推送失败）：*\n"
           while read -r line; do
-            MSG+="- $line
-"
+            MSG+="- $line\n"
           done < new_images_failed.log
         fi
 
         curl -s -X POST "https://api.telegram.org/bot$TG_BOT_TOKEN/sendMessage" \
           -d chat_id="$TG_CHAT_ID" \
-          -d parse_mode=HTML \
+          -d parse_mode=Markdown \
           -d text="$MSG"
