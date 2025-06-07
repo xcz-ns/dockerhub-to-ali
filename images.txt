@@ -15,3 +15,4 @@ yidadaa/chatgpt-next-web:latest
 soulteary/flare:latest
 looby/aliyundrive-subscribe:latest
 containrrr/watchtower:latest
+jxxghp/moviepilot-v2:latest
