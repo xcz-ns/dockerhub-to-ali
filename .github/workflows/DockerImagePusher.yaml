@@ -3,7 +3,7 @@ name: docker_image_pusher
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 6,12 * * *'
+    - cron: '0 22,4 * * *'
 
 env:
   ALIYUN_REGISTRY: "${{ secrets.ALIYUN_REGISTRY }}"
@@ -47,6 +47,8 @@ jobs:
 
     - name: 构建并推送镜像到阿里云
       run: |
+        set +e  # 遇到错误不中断整个脚本
+        
         docker login -u $ALIYUN_REGISTRY_USER -p $ALIYUN_REGISTRY_PASSWORD $ALIYUN_REGISTRY
 
         declare -A duplicate_images
@@ -115,9 +117,9 @@ jobs:
 
         STATUS="${{ job.status }}"
 
-        MSG="🧱 *GitHub Actions Docker 构建任务*\n"
+        MSG="🧱 *Docker Image Pusher任务*\n"
         MSG+="⏱️ 耗时：$DURATION\n"
-        MSG+="📅 时间：$(date "+%Y-%m-%d %H:%M:%S")\n"
+        MSG+="📅 时间：$(TZ='Asia/Shanghai' date "+%Y-%m-%d %H:%M:%S")\n"
         MSG+="✅ 状态：$STATUS\n\n"
 
         if [ -s new_images_success.log ]; then
