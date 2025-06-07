@@ -16,10 +16,10 @@ env:
 jobs:
 
   build:
-    name: Pull
+    name: 拉取镜像并推送至阿里云
     runs-on: ubuntu-latest
     steps:
-    - name: Before freeing up disk space
+    - name: 清理磁盘空间前的状态
       run: |
         echo "Before freeing up disk space"
         echo "=============================================================================="
@@ -27,10 +27,9 @@ jobs:
         echo "=============================================================================="
 
     # 增加可用磁盘空间
-    - name: Maximize build space
+    - name: 最大化构建空间
       uses: easimon/maximize-build-space@master
       with:
-
         root-reserve-mb: 2048
         swap-size-mb: 128
         remove-dotnet: 'true'
@@ -40,23 +39,23 @@ jobs:
         # remove-codeql: 'true'
         build-mount-path: '/var/lib/docker/'
 
-    - name: Restart docker
+    - name: 重启 Docker 服务
       run: sudo service docker restart
 
-    - name: Free up disk space complete
+    - name: 磁盘空间清理完成
       run: |
         echo "Free up disk space complete"
         echo "=============================================================================="
         df -hT
         echo "=============================================================================="
 
-    - name: Checkout Code
+    - name: 获取代码
       uses: actions/checkout@v4
 
-    - name: Docker Setup Buildx
+    - name: 配置 Buildx
       uses: docker/setup-buildx-action@v3
 
-    - name: Build and push image Aliyun
+    - name: 构建并推送镜像到阿里云
       run: |
         docker login -u $ALIYUN_REGISTRY_USER -p $ALIYUN_REGISTRY_PASSWORD $ALIYUN_REGISTRY
         # 数据预处理,判断镜像是否重名
