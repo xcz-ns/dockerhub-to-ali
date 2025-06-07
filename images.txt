@@ -6,7 +6,6 @@ vaultwarden/server:latest
 gdy666/lucky:latest
 alcapone1933/composerize:latest
 xhofe/alist:latest
-freediy/doube-itv:latest
 b3log/siyuan:latest
 finab/bark-server:latest
 hslr/sun-panel:latest
