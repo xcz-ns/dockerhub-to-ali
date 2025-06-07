@@ -2,8 +2,6 @@ name: docker_image_pusher
 
 on:
   workflow_dispatch:
-  # push:
-  #  branches: [ main ]
   schedule:
     - cron: '0 6,12 * * *'
 
@@ -12,21 +10,23 @@ env:
   ALIYUN_NAME_SPACE: "${{ secrets.ALIYUN_NAME_SPACE }}"
   ALIYUN_REGISTRY_USER: "${{ secrets.ALIYUN_REGISTRY_USER }}"
   ALIYUN_REGISTRY_PASSWORD: "${{ secrets.ALIYUN_REGISTRY_PASSWORD }}"
+  TG_BOT_TOKEN: "${{ secrets.TG_BOT_TOKEN }}"
+  TG_CHAT_ID: "${{ secrets.TG_CHAT_ID }}"
 
 jobs:
-
   build:
     name: 拉取镜像并推送至阿里云
     runs-on: ubuntu-latest
     steps:
-    - name: 清理磁盘空间前的状态
+    - name: 初始化时间与日志
       run: |
-        echo "Before freeing up disk space"
-        echo "=============================================================================="
-        df -hT
-        echo "=============================================================================="
+        echo "start_time=$(date +%s)" >> $GITHUB_ENV
+        > new_images_success.log
+        > new_images_failed.log
 
-    # 增加可用磁盘空间
+    - name: 清理磁盘空间前的状态
+      run: df -hT
+
     - name: 最大化构建空间
       uses: easimon/maximize-build-space@master
       with:
@@ -34,20 +34,10 @@ jobs:
         swap-size-mb: 128
         remove-dotnet: 'true'
         remove-haskell: 'true'
-        # 如果空间还是不够用，可以把以下开启，清理出更多空间
-        # remove-android: 'true'
-        # remove-codeql: 'true'
         build-mount-path: '/var/lib/docker/'
 
     - name: 重启 Docker 服务
       run: sudo service docker restart
-
-    - name: 磁盘空间清理完成
-      run: |
-        echo "Free up disk space complete"
-        echo "=============================================================================="
-        df -hT
-        echo "=============================================================================="
 
     - name: 获取代码
       uses: actions/checkout@v4
@@ -58,100 +48,92 @@ jobs:
     - name: 构建并推送镜像到阿里云
       run: |
         docker login -u $ALIYUN_REGISTRY_USER -p $ALIYUN_REGISTRY_PASSWORD $ALIYUN_REGISTRY
-        # 数据预处理,判断镜像是否重名
+
         declare -A duplicate_images
         declare -A temp_map
-        while IFS= read -r line || [ -n "$line" ]; do
-            # 忽略空行与注释
-            [[ -z "$line" ]] && continue
-            if echo "$line" | grep -q '^\s*#'; then
-                continue
-            fi
-            
-            # 获取镜像的完整名称，例如kasmweb/nginx:1.25.3（命名空间/镜像名:版本号）
-            image=$(echo "$line" | awk '{print $NF}')
-            # 将@sha256:等字符删除
-            image="${image%%@*}"
-            echo "image $image"
-            # 获取镜像名:版本号  例如nginx:1.25.3
-            image_name_tag=$(echo "$image" | awk -F'/' '{print $NF}')
-            echo "image_name_tag $image_name_tag"
-            # 获取命名空间 例如kasmweb,  这里有种特殊情况 docker.io/nginx，把docker.io当成命名空间，也OK
-            name_space=$(echo "$image" | awk -F'/' '{if (NF==3) print $2; else if (NF==2) print $1; else print ""}')
-            echo "name_space: $name_space"
-            # 这里不要是空值影响判断
-            name_space="${name_space}_"
-            # 获取镜像名例如nginx
-            image_name=$(echo "$image_name_tag" | awk -F':' '{print $1}')
-            echo "image_name: $image_name"
-            
-            # 如果镜像存在于数组中，则添加temp_map
-            if [[ -n "${temp_map[$image_name]}" ]]; then
-                 # 如果temp_map已经存在镜像名，判断是不是同一命名空间
-                 if [[ "${temp_map[$image_name]}" != $name_space  ]]; then
-                    echo "duplicate image name: $image_name"
-                    duplicate_images[$image_name]="true"
-                 fi
-            else
-                # 存镜像的命名空间
-                temp_map[$image_name]=$name_space
-            fi       
-        done < images.txt
-        
-        
-        while IFS= read -r line || [ -n "$line" ]; do
-            # 忽略空行与注释
-            [[ -z "$line" ]] && continue
-            if echo "$line" | grep -q '^\s*#'; then
-                continue
-            fi
-        
-            echo "docker pull $line"
-            docker pull $line
-            platform=$(echo "$line" | awk -F'--platform[ =]' '{if (NF>1) print $2}' | awk '{print $1}')
-            echo "platform is $platform"
-            # 如果存在架构信息 将架构信息拼到镜像名称前面
-            if [ -z "$platform" ]; then
-                platform_prefix=""
-            else
-                platform_prefix="${platform//\//_}_"
-            fi
-            echo "platform_prefix is $platform_prefix"
-            # 获取镜像的完整名称，例如kasmweb/nginx:1.25.3（命名空间/镜像名:版本号）
-            image=$(echo "$line" | awk '{print $NF}')
 
-            # 获取 镜像名:版本号  例如nginx:1.25.3
+        while IFS= read -r line || [ -n "$line" ]; do
+            [[ -z "$line" ]] && continue
+            [[ "$line" =~ ^\s*# ]] && continue
+            image=$(echo "$line" | awk '{print $NF}')
+            image="${image%%@*}"
             image_name_tag=$(echo "$image" | awk -F'/' '{print $NF}')
-            # 获取命名空间 例如kasmweb  这里有种特殊情况 docker.io/nginx，把docker.io当成命名空间，也OK
             name_space=$(echo "$image" | awk -F'/' '{if (NF==3) print $2; else if (NF==2) print $1; else print ""}')
-            # 获取镜像名例  例如nginx
+            name_space="${name_space}_"
             image_name=$(echo "$image_name_tag" | awk -F':' '{print $1}')
-        
-            name_space_prefix=""
-            # 如果镜像名重名
-            if [[ -n "${duplicate_images[$image_name]}" ]]; then
-               #如果命名空间非空，将命名空间加到前缀
-               if [[ -n "${name_space}" ]]; then
-                  name_space_prefix="${name_space}_"
-               fi
+            if [[ -n "${temp_map[$image_name]}" ]]; then
+                if [[ "${temp_map[$image_name]}" != $name_space ]]; then
+                    duplicate_images[$image_name]="true"
+                fi
+            else
+                temp_map[$image_name]=$name_space
             fi
-            
-            # 将@sha256:等字符删除
-            image_name_tag="${image_name_tag%%@*}"
-            new_image="$ALIYUN_REGISTRY/$ALIYUN_NAME_SPACE/$platform_prefix$name_space_prefix$image_name_tag"
-            echo "docker tag $image $new_image"
-            docker tag $image $new_image
-            echo "docker push $new_image"
-            docker push $new_image
-            echo "开始清理磁盘空间"
-            echo "=============================================================================="
-            df -hT
-            echo "=============================================================================="
-            docker rmi $image
-            docker rmi $new_image
-            echo "磁盘空间清理完毕"
-            echo "=============================================================================="
-            df -hT
-            echo "=============================================================================="     
-            
         done < images.txt
+
+        while IFS= read -r line || [ -n "$line" ]; do
+            [[ -z "$line" ]] && continue
+            [[ "$line" =~ ^\s*# ]] && continue
+
+            docker pull $line || { echo "$line" >> new_images_failed.log; continue; }
+
+            platform=$(echo "$line" | awk -F'--platform[ =]' '{if (NF>1) print $2}' | awk '{print $1}')
+            platform_prefix=""
+            [[ -n "$platform" ]] && platform_prefix="${platform//\//_}_"
+
+            image=$(echo "$line" | awk '{print $NF}')
+            image="${image%%@*}"
+            image_name_tag=$(echo "$image" | awk -F'/' '{print $NF}')
+            name_space=$(echo "$image" | awk -F'/' '{if (NF==3) print $2; else if (NF==2) print $1; else print ""}')
+            image_name=$(echo "$image_name_tag" | awk -F':' '{print $1}')
+            name_space_prefix=""
+            if [[ -n "${duplicate_images[$image_name]}" && -n "$name_space" ]]; then
+              name_space_prefix="${name_space}_"
+            fi
+
+            new_image="$ALIYUN_REGISTRY/$ALIYUN_NAME_SPACE/$platform_prefix$name_space_prefix$image_name_tag"
+            docker tag "$image" "$new_image" || { echo "$image" >> new_images_failed.log; continue; }
+
+            if docker push "$new_image"; then
+              echo "$new_image" >> new_images_success.log
+            else
+              echo "$image" >> new_images_failed.log
+              continue
+            fi
+
+            docker rmi "$image" || true
+            docker rmi "$new_image" || true
+        done < images.txt
+
+    - name: 发送构建状态和镜像列表到 Telegram
+      if: always()
+      run: |
+        end_time=$(date +%s)
+        duration_sec=$(( end_time - start_time ))
+        duration_min=$(( duration_sec / 60 ))
+        duration_rem=$(( duration_sec % 60 ))
+        DURATION="${duration_min}分${duration_rem}秒"
+
+        STATUS="${{ job.status }}"
+        MSG="🧱 *GitHub Actions Docker 构建任务*%0A"
+        MSG="$MSG⏱️ 耗时：$DURATION%0A"
+        MSG="$MSG📅 时间：$(date "+%Y-%m-%d %H:%M:%S")%0A"
+        MSG="$MSG✅ 状态：$STATUS%0A"
+
+        if [ -s new_images_success.log ]; then
+          MSG="$MSG%0A📦 *成功推送的镜像：*%0A"
+          while read -r line; do
+            MSG="$MSG- $line%0A"
+          done < new_images_success.log
+        fi
+
+        if [ -s new_images_failed.log ]; then
+          MSG="$MSG%0A🚫 *失败的镜像（构建/推送失败）：*%0A"
+          while read -r line; do
+            MSG="$MSG- $line%0A"
+          done < new_images_failed.log
+        fi
+
+        curl -s -X POST "https://api.telegram.org/bot$TG_BOT_TOKEN/sendMessage" \
+          -d chat_id="$TG_CHAT_ID" \
+          --data-urlencode "text=$MSG" \
+          -d parse_mode=Markdown
