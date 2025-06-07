@@ -1,4 +1,4 @@
-name: Docker
+name: docker_image_pusher
 
 on:
   workflow_dispatch:
