@@ -3,7 +3,7 @@ name: docker_image_pusher
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 4,10,16,22 * * *'
+    - cron: '0 0 * * 3,6'
 
 env:
   ALIYUN_REGISTRY: "${{ secrets.ALIYUN_REGISTRY }}"
