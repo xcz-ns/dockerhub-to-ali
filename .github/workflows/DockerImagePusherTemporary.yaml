@@ -1,9 +1,7 @@
-name: docker_image_pusher
+name: docker_image_pusher_temporary
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '0 0 * * 3,6'
 
 env:
   ALIYUN_REGISTRY: "${{ secrets.ALIYUN_REGISTRY }}"
@@ -12,7 +10,7 @@ env:
   ALIYUN_REGISTRY_PASSWORD: "${{ secrets.ALIYUN_REGISTRY_PASSWORD }}"
   TG_BOT_TOKEN: "${{ secrets.TG_BOT_TOKEN }}"
   TG_CHAT_ID: "${{ secrets.TG_CHAT_ID }}"
-  PRIVATE_REGISTRY: "dr.xczns.top:58808"  # 新增变量：私人仓库地址
+  PRIVATE_REGISTRY: "dr.xczns.top:58808"
 
 jobs:
   build:
