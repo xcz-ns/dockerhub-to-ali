@@ -12,10 +12,11 @@ env:
   ALIYUN_REGISTRY_PASSWORD: "${{ secrets.ALIYUN_REGISTRY_PASSWORD }}"
   TG_BOT_TOKEN: "${{ secrets.TG_BOT_TOKEN }}"
   TG_CHAT_ID: "${{ secrets.TG_CHAT_ID }}"
+  PRIVATE_REGISTRY: "dr.xczns.top:58808"  # 新增变量：私人仓库地址
 
 jobs:
   build:
-    name: 拉取镜像并推送至阿里云
+    name: 拉取镜像并推送至阿里云和私人仓库
     runs-on: ubuntu-latest
     steps:
     - name: 初始化时间与日志
@@ -23,6 +24,8 @@ jobs:
         echo "start_time=$(date +%s)" >> $GITHUB_ENV
         > new_images_success.log
         > new_images_failed.log
+        > private_images_success.log
+        > private_images_failed.log
 
     - name: 清理磁盘空间前的状态
       run: df -hT
@@ -45,10 +48,10 @@ jobs:
     - name: 配置 Buildx
       uses: docker/setup-buildx-action@v3
 
-    - name: 构建并推送镜像到阿里云
+    - name: 构建并推送镜像到阿里云和私人仓库
       run: |
         set +e  # 遇到错误不中断整个脚本
-        
+
         docker login -u $ALIYUN_REGISTRY_USER -p $ALIYUN_REGISTRY_PASSWORD $ALIYUN_REGISTRY
 
         declare -A duplicate_images
@@ -99,11 +102,23 @@ jobs:
               echo "$new_image" >> new_images_success.log
             else
               echo "$image" >> new_images_failed.log
+              docker rmi "$image" "$new_image" || true
               continue
             fi
 
-            docker rmi "$image" || true
-            docker rmi "$new_image" || true
+            # 额外推送到私人仓库，无需登录，直接推
+            private_image="$PRIVATE_REGISTRY/$platform_prefix$name_space_prefix$image_name_tag"
+            docker tag "$image" "$private_image" || { echo "$image" >> private_images_failed.log; continue; }
+
+            if docker push "$private_image"; then
+              echo "$private_image" >> private_images_success.log
+            else
+              echo "$private_image" >> private_images_failed.log
+            fi
+
+            # 清理本地镜像tag
+            docker rmi "$image" "$new_image" "$private_image" || true
+
         done < images.txt
 
     - name: 发送构建状态和镜像列表到 Telegram
@@ -123,17 +138,31 @@ jobs:
         MSG+="✅ 状态：$STATUS\n\n"
 
         if [ -s new_images_success.log ]; then
-          MSG+="📦 *成功推送的镜像：*\n"
+          MSG+="📦 *成功推送到阿里云的镜像：*\n"
           while read -r line; do
             MSG+="- $line\n"
           done < new_images_success.log
         fi
 
         if [ -s new_images_failed.log ]; then
-          MSG+="\n🚫 *失败的镜像（构建/推送失败）：*\n"
+          MSG+="\n🚫 *推送阿里云失败的镜像（拉取/打tag/推送失败）：*\n"
           while read -r line; do
             MSG+="- $line\n"
           done < new_images_failed.log
+        fi
+
+        if [ -s private_images_success.log ]; then
+          MSG+="\n📦 *成功推送到私人仓库的镜像：*\n"
+          while read -r line; do
+            MSG+="- $line\n"
+          done < private_images_success.log
+        fi
+
+        if [ -s private_images_failed.log ]; then
+          MSG+="\n🚫 *推送私人仓库失败的镜像：*\n"
+          while read -r line; do
+            MSG+="- $line\n"
+          done < private_images_failed.log
         fi
 
         printf "%b" "$MSG" | curl -s -X POST "https://api.telegram.org/bot$TG_BOT_TOKEN/sendMessage" \
