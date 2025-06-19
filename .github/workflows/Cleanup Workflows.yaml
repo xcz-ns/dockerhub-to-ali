@@ -1,4 +1,4 @@
-name: Cleanup Workflows
+name: cleanup workflows
 
 on:
   workflow_dispatch:  # 手动触发
