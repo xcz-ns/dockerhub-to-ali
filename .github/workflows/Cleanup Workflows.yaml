@@ -20,6 +20,6 @@ jobs:
         delete_releases: false                     # 不清理 Releases
         delete_workflows: true                     # 开启清理 Workflows
         workflows_keep_latest: 10                  # 保留最近 10 个 runs
-        max_workflows_fetch: 2000                   # 一次最多拉取 200 条记录进行清理
+        max_workflows_fetch: 1000                   # 一次最多拉取 200 条记录进行清理
         repo: xcz-ns/docker_image_pusher           # 指定你的仓库
         gh_token: ${{ secrets.REPO_TOKEN }}        # 你的 Personal Access Token（PAT）
