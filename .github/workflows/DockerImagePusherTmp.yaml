@@ -1,4 +1,4 @@
-name: docker_image_pusher_temporary
+name: docker_image_pusher_tmp
 
 on:
   push:
