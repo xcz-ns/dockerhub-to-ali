@@ -1,4 +1,4 @@
-name: docker image pusher tmp
+name: Docker 镜像推送（临时）
 
 on:
   push:

@@ -1,4 +1,4 @@
-name: docker image pusher
+name: Docker 镜像推送
 
 on:
   workflow_dispatch:
