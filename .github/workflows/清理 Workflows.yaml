@@ -27,5 +27,5 @@ jobs:
         delete_workflows: true
         workflows_keep_latest: ${{ github.event.inputs.keep_count || 10 }}  # 使用手动输入或默认值
         max_workflows_fetch: 1000
-        repo: xcz-ns/docker_image_pusher
+        repo: ${{ github.repository }}
         gh_token: ${{ secrets.REPO_TOKEN }}
