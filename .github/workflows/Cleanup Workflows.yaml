@@ -2,6 +2,12 @@ name: cleanup workflows
 
 on:
   workflow_dispatch:  # 手动触发
+    inputs:
+      keep_count:
+        description: '保留最近的 workflow runs 数量'
+        required: false
+        default: '10'
+
   schedule:
     - cron: '0 0 * * *'  # 每天 UTC 0 点触发（北京时间早上 8 点）
 
@@ -17,9 +23,9 @@ jobs:
     - name: 清理 Workflows
       uses: danshui-git/delete-releases-workflows@main
       with:
-        delete_releases: false                     # 不清理 Releases
-        delete_workflows: true                     # 开启清理 Workflows
-        workflows_keep_latest: 10                  # 保留最近 10 个 runs
-        max_workflows_fetch: 1000                   # 一次最多拉取 200 条记录进行清理
-        repo: xcz-ns/docker_image_pusher           # 指定你的仓库
-        gh_token: ${{ secrets.REPO_TOKEN }}        # 你的 Personal Access Token（PAT）
+        delete_releases: false
+        delete_workflows: true
+        workflows_keep_latest: ${{ github.event.inputs.keep_count || 10 }}  # 使用手动输入或默认值
+        max_workflows_fetch: 1000
+        repo: xcz-ns/docker_image_pusher
+        gh_token: ${{ secrets.REPO_TOKEN }}
