@@ -1,0 +1,25 @@
+name: Cleanup Workflows
+
+on:
+  workflow_dispatch:  # 手动触发
+  schedule:
+    - cron: '0 0 * * *'  # 每天 UTC 0 点触发（北京时间早上 8 点）
+
+jobs:
+  clean:
+    name: 清理 Workflows 任务
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: 检出仓库
+      uses: actions/checkout@v4
+
+    - name: 清理 Workflows
+      uses: danshui-git/delete-releases-workflows@main
+      with:
+        delete_releases: false                     # 不清理 Releases
+        delete_workflows: true                     # 开启清理 Workflows
+        workflows_keep_latest: 10                  # 保留最近 10 个 runs
+        max_workflows_fetch: 2000                   # 一次最多拉取 200 条记录进行清理
+        repo: xcz-ns/docker_image_pusher           # 指定你的仓库
+        gh_token: ${{ secrets.REPO_TOKEN }}        # 你的 Personal Access Token（PAT）

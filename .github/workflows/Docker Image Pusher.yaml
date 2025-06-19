@@ -1,25 +1,27 @@
-name: docker_image_pusher_tmp
+name: docker image pusher
 
 on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * 3,6'
   push:
     branches:
       - '**'  # 监听所有分支的 push
     paths:
-      - 'images_tmp.txt'  # 只有 images_tmp.txt 文件变更才触发
-  workflow_dispatch:  # 仍然允许手动触发
+      - 'images.txt'  # 只有 images.txt 文件变更才触发
 
 env:
-  IMAGE_LIST_FILE: "images_tmp.txt"  # ✅ 定义镜像列表文件名
   ALIYUN_REGISTRY: "${{ secrets.ALIYUN_REGISTRY }}"
   ALIYUN_NAME_SPACE: "${{ secrets.ALIYUN_NAME_SPACE }}"
   ALIYUN_REGISTRY_USER: "${{ secrets.ALIYUN_REGISTRY_USER }}"
   ALIYUN_REGISTRY_PASSWORD: "${{ secrets.ALIYUN_REGISTRY_PASSWORD }}"
   TG_BOT_TOKEN: "${{ secrets.TG_BOT_TOKEN }}"
   TG_CHAT_ID: "${{ secrets.TG_CHAT_ID }}"
+  PRIVATE_REGISTRY: "dr.xczns.top:58808"  # 新增变量：私人仓库地址
 
 jobs:
   build:
-    name: 拉取镜像并推送至阿里云
+    name: 拉取镜像并推送至阿里云和私人仓库
     runs-on: ubuntu-latest
     steps:
     - name: 初始化时间与日志
@@ -27,6 +29,8 @@ jobs:
         echo "start_time=$(date +%s)" >> $GITHUB_ENV
         > new_images_success.log
         > new_images_failed.log
+        > private_images_success.log
+        > private_images_failed.log
 
     - name: 清理磁盘空间前的状态
       run: df -hT
@@ -49,7 +53,7 @@ jobs:
     - name: 配置 Buildx
       uses: docker/setup-buildx-action@v3
 
-    - name: 构建并推送镜像到阿里云
+    - name: 构建并推送镜像到阿里云和私人仓库
       run: |
         set +e  # 遇到错误不中断整个脚本
 
@@ -74,7 +78,7 @@ jobs:
             else
                 temp_map[$image_name]=$name_space
             fi
-        done < "$IMAGE_LIST_FILE"
+        done < images.txt
 
         while IFS= read -r line || [ -n "$line" ]; do
             [[ -z "$line" ]] && continue
@@ -107,9 +111,20 @@ jobs:
               continue
             fi
 
-            docker rmi "$image" "$new_image" || true
+            # 额外推送到私人仓库，无需登录，直接推
+            private_image="$PRIVATE_REGISTRY/$platform_prefix$name_space_prefix$image_name_tag"
+            docker tag "$image" "$private_image" || { echo "$image" >> private_images_failed.log; continue; }
 
-        done < "$IMAGE_LIST_FILE"
+            if docker push "$private_image"; then
+              echo "$private_image" >> private_images_success.log
+            else
+              echo "$private_image" >> private_images_failed.log
+            fi
+
+            # 清理本地镜像tag
+            docker rmi "$image" "$new_image" "$private_image" || true
+
+        done < images.txt
 
     - name: 发送构建状态和镜像列表到 Telegram
       if: always()
@@ -139,6 +154,20 @@ jobs:
           while read -r line; do
             MSG+="- $line\n"
           done < new_images_failed.log
+        fi
+
+        if [ -s private_images_success.log ]; then
+          MSG+="\n📦 *成功推送到私人仓库的镜像：*\n"
+          while read -r line; do
+            MSG+="- $line\n"
+          done < private_images_success.log
+        fi
+
+        if [ -s private_images_failed.log ]; then
+          MSG+="\n🚫 *推送私人仓库失败的镜像：*\n"
+          while read -r line; do
+            MSG+="- $line\n"
+          done < private_images_failed.log
         fi
 
         printf "%b" "$MSG" | curl -s -X POST "https://api.telegram.org/bot$TG_BOT_TOKEN/sendMessage" \
