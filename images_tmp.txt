@@ -1,1 +1,1 @@
-ghcr.io/wg-easy/wg-easy:latest
+penlistteam/openlist:latest
