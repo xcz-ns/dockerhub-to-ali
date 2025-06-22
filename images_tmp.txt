@@ -1,1 +1,1 @@
-penlistteam/openlist:latest
+openlistteam/openlist:latest
