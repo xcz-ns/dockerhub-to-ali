@@ -1,1 +1,1 @@
-openlistteam/openlist:latest
+ghcr.io/lilu0826/alitv_openlist:latest
