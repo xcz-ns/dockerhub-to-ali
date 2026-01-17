@@ -41,6 +41,9 @@ jobs:
         remove-haskell: 'true'
         build-mount-path: '/var/lib/docker/'
 
+    - name: 安装依赖工具
+      run: sudo apt-get update && sudo apt-get install -y jq
+
     - name: 重启 Docker 服务
       run: sudo service docker restart
 
@@ -54,8 +57,11 @@ jobs:
       run: |
         set +e
         docker login -u $ALIYUN_REGISTRY_USER -p $ALIYUN_REGISTRY_PASSWORD $ALIYUN_REGISTRY
+        today_tag=$(date +'%m%d')
         declare -A duplicate_images
         declare -A temp_map
+
+        # 检查重复镜像
         while IFS= read -r line || [ -n "$line" ]; do
             [[ -z "$line" ]] && continue
             [[ "$line" =~ ^\s*# ]] && continue
@@ -73,13 +79,17 @@ jobs:
                 temp_map[$image_name]=$name_space
             fi
         done < images.txt
+
+        # 拉取、tag、推送镜像
         while IFS= read -r line || [ -n "$line" ]; do
             [[ -z "$line" ]] && continue
             [[ "$line" =~ ^\s*# ]] && continue
             docker pull $line || { echo "$line" >> new_images_failed.log; continue; }
+
             platform=$(echo "$line" | awk -F'--platform[ =]' '{if (NF>1) print $2}' | awk '{print $1}')
             platform_prefix=""
             [[ -n "$platform" ]] && platform_prefix="${platform//\//_}_"
+
             image=$(echo "$line" | awk '{print $NF}')
             image="${image%%@*}"
             image_name_tag=$(echo "$image" | awk -F'/' '{print $NF}')
@@ -89,8 +99,11 @@ jobs:
             if [[ -n "${duplicate_images[$image_name]}" && -n "$name_space" ]]; then
               name_space_prefix="${name_space}_"
             fi
-            new_image="$ALIYUN_REGISTRY/$ALIYUN_NAME_SPACE/$platform_prefix$name_space_prefix$image_name_tag"
+
+            # 使用当天日期作为标签
+            new_image="$ALIYUN_REGISTRY/$ALIYUN_NAME_SPACE/$platform_prefix$name_space_prefix$image_name:$today_tag"
             docker tag "$image" "$new_image" || { echo "$image" >> new_images_failed.log; continue; }
+
             if docker push "$new_image"; then
               echo "$new_image" >> new_images_success.log
             else
@@ -98,7 +111,24 @@ jobs:
               docker rmi "$image" "$new_image" || true
               continue
             fi
+
             docker rmi "$image" "$new_image" || true
+
+            # 保留最近10个镜像，删除老镜像
+            repo_path="$ALIYUN_REGISTRY/$ALIYUN_NAME_SPACE/$platform_prefix$name_space_prefix$image_name"
+            old_images=$(curl -s -u "$ALIYUN_REGISTRY_USER:$ALIYUN_REGISTRY_PASSWORD" \
+                          "https://$ALIYUN_REGISTRY/v2/$ALIYUN_NAME_SPACE/$image_name/tags/list" \
+                          | jq -r '.tags[] | select(. != "'"$today_tag"'")' | sort -r)
+            count=0
+            for tag in $old_images; do
+              count=$((count+1))
+              if [ $count -ge 10 ]; then
+                echo "删除旧镜像: $repo_path:$tag"
+                curl -s -X DELETE -u "$ALIYUN_REGISTRY_USER:$ALIYUN_REGISTRY_PASSWORD" \
+                     "https://$ALIYUN_REGISTRY/v2/$ALIYUN_NAME_SPACE/$image_name/manifests/$tag" || true
+              fi
+            done
+
         done < images.txt
 
     - name: 发送构建状态和镜像列表到 Telegram
@@ -130,7 +160,6 @@ jobs:
           done < new_images_failed.log
         fi
         
-        # 修正后的 curl 命令，确保换行符正确解析
         curl -s -X POST "https://api.telegram.org/bot$TG_BOT_TOKEN/sendMessage" \
           -d chat_id="$TG_CHAT_ID" \
           -d parse_mode=Markdown \
