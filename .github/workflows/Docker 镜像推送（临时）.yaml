@@ -3,13 +3,13 @@ name: Docker 镜像推送（临时）
 on:
   push:
     branches:
-      - '**'  # 监听所有分支的 push
+      - '**'  
     paths:
-      - 'images_tmp.txt'  # 只有 images_tmp.txt 文件变更才触发
-  workflow_dispatch:  # 仍然允许手动触发
+      - 'images_tmp.txt'
+  workflow_dispatch:
 
 env:
-  IMAGE_LIST_FILE: "images_tmp.txt"  # ✅ 定义镜像列表文件名
+  IMAGE_LIST_FILE: "images_tmp.txt"
   ALIYUN_REGISTRY: "${{ secrets.ALIYUN_REGISTRY }}"
   ALIYUN_NAME_SPACE: "${{ secrets.ALIYUN_NAME_SPACE }}"
   ALIYUN_REGISTRY_USER: "${{ secrets.ALIYUN_REGISTRY_USER }}"
@@ -31,6 +31,9 @@ jobs:
     - name: 清理磁盘空间前的状态
       run: df -hT
 
+    - name: 安装依赖工具
+      run: sudo apt-get update && sudo apt-get install -y jq
+
     - name: 最大化构建空间
       uses: easimon/maximize-build-space@master
       with:
@@ -51,13 +54,13 @@ jobs:
 
     - name: 构建并推送镜像到阿里云
       run: |
-        set +e  # 遇到错误不中断整个脚本
-
+        set +e
         docker login -u $ALIYUN_REGISTRY_USER -p $ALIYUN_REGISTRY_PASSWORD $ALIYUN_REGISTRY
-
+        today_tag=$(date +'%m%d')
         declare -A duplicate_images
         declare -A temp_map
 
+        # 检查重复镜像
         while IFS= read -r line || [ -n "$line" ]; do
             [[ -z "$line" ]] && continue
             [[ "$line" =~ ^\s*# ]] && continue
@@ -76,6 +79,7 @@ jobs:
             fi
         done < "$IMAGE_LIST_FILE"
 
+        # 拉取、tag、推送镜像
         while IFS= read -r line || [ -n "$line" ]; do
             [[ -z "$line" ]] && continue
             [[ "$line" =~ ^\s*# ]] && continue
@@ -96,7 +100,8 @@ jobs:
               name_space_prefix="${name_space}_"
             fi
 
-            new_image="$ALIYUN_REGISTRY/$ALIYUN_NAME_SPACE/$platform_prefix$name_space_prefix$image_name_tag"
+            # 使用当天日期作为标签
+            new_image="$ALIYUN_REGISTRY/$ALIYUN_NAME_SPACE/$platform_prefix$name_space_prefix$image_name:$today_tag"
             docker tag "$image" "$new_image" || { echo "$image" >> new_images_failed.log; continue; }
 
             if docker push "$new_image"; then
@@ -108,6 +113,20 @@ jobs:
             fi
 
             docker rmi "$image" "$new_image" || true
+
+            # 自动删除老镜像，只保留最近10个
+            repo="$ALIYUN_NAME_SPACE/$image_name"
+            tags=$(curl -s -u "$ALIYUN_REGISTRY_USER:$ALIYUN_REGISTRY_PASSWORD" \
+              "https://$ALIYUN_REGISTRY/v2/$repo/tags/list" | jq -r '.tags | sort | reverse')
+            count=0
+            for tag in $tags; do
+              count=$((count+1))
+              if [ $count -gt 10 ]; then
+                echo "删除旧镜像: $ALIYUN_REGISTRY/$repo:$tag"
+                curl -s -X DELETE -u "$ALIYUN_REGISTRY_USER:$ALIYUN_REGISTRY_PASSWORD" \
+                  "https://$ALIYUN_REGISTRY/v2/$repo/manifests/$tag" || true
+              fi
+            done
 
         done < "$IMAGE_LIST_FILE"
 
@@ -129,18 +148,17 @@ jobs:
         if [ -s new_images_success.log ]; then
           MSG+="📦 *成功推送到阿里云的镜像：*\n"
           while read -r line; do
-            MSG+="- \`$line\`\n"  # ✅ 使用反引号包裹，使其变为可复制的文本
+            MSG+="- \`$line\`\n"
           done < new_images_success.log
         fi
 
         if [ -s new_images_failed.log ]; then
           MSG+="\n🚫 *推送失败的镜像：*\n"
           while read -r line; do
-            MSG+="- \`$line\`\n"  # ✅ 使用反引号包裹，使其变为可复制的文本
+            MSG+="- \`$line\`\n"
           done < new_images_failed.log
         fi
 
-        # ✅ 使用修正后的 curl 命令确保换行正确
         curl -s -X POST "https://api.telegram.org/bot$TG_BOT_TOKEN/sendMessage" \
           -d chat_id="$TG_CHAT_ID" \
           -d parse_mode=Markdown \
