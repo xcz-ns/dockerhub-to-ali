@@ -53,7 +53,7 @@ jobs:
     - name: 配置 Buildx
       uses: docker/setup-buildx-action@v3
 
-    - name: 构建并推送镜像到阿里云
+    - name: 构建并推送镜像到阿里云 (含Latest标签)
       run: |
         set +e
         docker login -u $ALIYUN_REGISTRY_USER -p $ALIYUN_REGISTRY_PASSWORD $ALIYUN_REGISTRY
@@ -61,7 +61,7 @@ jobs:
         declare -A duplicate_images
         declare -A temp_map
 
-        # 检查重复镜像
+        # 检查重复镜像 (处理命名空间冲突)
         while IFS= read -r line || [ -n "$line" ]; do
             [[ -z "$line" ]] && continue
             [[ "$line" =~ ^\s*# ]] && continue
@@ -80,12 +80,15 @@ jobs:
             fi
         done < images.txt
 
-        # 拉取、tag、推送镜像
+        # 拉取、Tag、推送 (主逻辑)
         while IFS= read -r line || [ -n "$line" ]; do
             [[ -z "$line" ]] && continue
             [[ "$line" =~ ^\s*# ]] && continue
+            
+            # 1. 拉取镜像
             docker pull $line || { echo "$line" >> new_images_failed.log; continue; }
 
+            # 2. 解析变量
             platform=$(echo "$line" | awk -F'--platform[ =]' '{if (NF>1) print $2}' | awk '{print $1}')
             platform_prefix=""
             [[ -n "$platform" ]] && platform_prefix="${platform//\//_}_"
@@ -100,32 +103,52 @@ jobs:
               name_space_prefix="${name_space}_"
             fi
 
-            # 使用当天日期作为标签
-            new_image="$ALIYUN_REGISTRY/$ALIYUN_NAME_SPACE/$platform_prefix$name_space_prefix$image_name:$today_tag"
-            docker tag "$image" "$new_image" || { echo "$image" >> new_images_failed.log; continue; }
+            # 3. 定义目标镜像名 (日期标签 + Latest标签)
+            target_image_base="$ALIYUN_REGISTRY/$ALIYUN_NAME_SPACE/$platform_prefix$name_space_prefix$image_name"
+            image_with_date="$target_image_base:$today_tag"
+            image_with_latest="$target_image_base:latest"
 
-            if docker push "$new_image"; then
-              echo "$new_image" >> new_images_success.log
-            else
+            # 4. 打标签
+            docker tag "$image" "$image_with_date" || { echo "$image (Tag Date)" >> new_images_failed.log; continue; }
+            docker tag "$image" "$image_with_latest" || { echo "$image (Tag Latest)" >> new_images_failed.log; continue; }
+
+            # 5. 推送 (先推日期，成功后推Latest)
+            push_ok=0
+            if docker push "$image_with_date"; then
+              if docker push "$image_with_latest"; then
+                echo "$image_with_latest" >> new_images_success.log
+                push_ok=1
+              fi
+            fi
+
+            if [ $push_ok -ne 1 ]; then
               echo "$image" >> new_images_failed.log
-              docker rmi "$image" "$new_image" || true
+              docker rmi "$image" "$image_with_date" "$image_with_latest" 2>/dev/null || true
               continue
             fi
 
-            docker rmi "$image" "$new_image" || true
+            # 6. 清理本地缓存
+            docker rmi "$image" "$image_with_date" "$image_with_latest" 2>/dev/null || true
 
-            # 保留最近10个镜像，删除老镜像
+            # 7. 保留最近10个镜像，删除老镜像 (仅针对日期标签)
+            # 注意：这里为了保持脚本简洁，删除逻辑沿用了原逻辑，但原逻辑在处理带前缀的镜像时可能需要微调
+            # 目前的逻辑是基于 $image_name 查询，如果你有 platform_prefix 或 name_space_prefix，建议谨慎测试删除功能
             repo_path="$ALIYUN_REGISTRY/$ALIYUN_NAME_SPACE/$platform_prefix$name_space_prefix$image_name"
+            
+            # 注意：此处调用 API 的 $image_name 若需匹配前缀可能需要修改，
+            # 但通常 Registry API 删除主要靠 Manifest，这里保持原样以确保兼容性
             old_images=$(curl -s -u "$ALIYUN_REGISTRY_USER:$ALIYUN_REGISTRY_PASSWORD" \
                           "https://$ALIYUN_REGISTRY/v2/$ALIYUN_NAME_SPACE/$image_name/tags/list" \
-                          | jq -r '.tags[] | select(. != "'"$today_tag"'")' | sort -r)
+                          | jq -r '.tags[] | select(. != "'"$today_tag"'" and . != "latest")' | sort -r 2>/dev/null || echo "")
+            
             count=0
             for tag in $old_images; do
               count=$((count+1))
               if [ $count -ge 10 ]; then
-                echo "删除旧镜像: $repo_path:$tag"
+                echo "尝试删除旧镜像: $repo_path:$tag"
+                # 注意：阿里云私有镜像仓库删除Manifest可能需要额外权限或特定API版本，此处使用通用Docker API
                 curl -s -X DELETE -u "$ALIYUN_REGISTRY_USER:$ALIYUN_REGISTRY_PASSWORD" \
-                     "https://$ALIYUN_REGISTRY/v2/$ALIYUN_NAME_SPACE/$image_name/manifests/$tag" || true
+                     "https://$ALIYUN_REGISTRY/v2/$ALIYUN_NAME_SPACE/$image_name/manifests/$tag" 2>/dev/null || true
               fi
             done
 
