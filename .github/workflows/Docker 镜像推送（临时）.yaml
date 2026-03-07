@@ -52,7 +52,7 @@ jobs:
     - name: 配置 Buildx
       uses: docker/setup-buildx-action@v3
 
-    - name: 构建并推送镜像到阿里云
+    - name: 构建并推送镜像到阿里云 (含Latest标签)
       run: |
         set +e
         docker login -u $ALIYUN_REGISTRY_USER -p $ALIYUN_REGISTRY_PASSWORD $ALIYUN_REGISTRY
@@ -84,8 +84,10 @@ jobs:
             [[ -z "$line" ]] && continue
             [[ "$line" =~ ^\s*# ]] && continue
 
+            # 1. 拉取镜像
             docker pull $line || { echo "$line" >> new_images_failed.log; continue; }
 
+            # 2. 解析变量
             platform=$(echo "$line" | awk -F'--platform[ =]' '{if (NF>1) print $2}' | awk '{print $1}')
             platform_prefix=""
             [[ -n "$platform" ]] && platform_prefix="${platform//\//_}_"
@@ -100,26 +102,44 @@ jobs:
               name_space_prefix="${name_space}_"
             fi
 
-            # 使用当天日期作为标签
-            new_image="$ALIYUN_REGISTRY/$ALIYUN_NAME_SPACE/$platform_prefix$name_space_prefix$image_name:$today_tag"
-            docker tag "$image" "$new_image" || { echo "$image" >> new_images_failed.log; continue; }
+            # 3. 定义目标镜像名 (日期标签 + Latest标签)
+            target_image_base="$ALIYUN_REGISTRY/$ALIYUN_NAME_SPACE/$platform_prefix$name_space_prefix$image_name"
+            image_with_date="$target_image_base:$today_tag"
+            image_with_latest="$target_image_base:latest"
 
-            if docker push "$new_image"; then
-              echo "$new_image" >> new_images_success.log
-            else
+            # 4. 打标签
+            docker tag "$image" "$image_with_date" || { echo "$image (Tag Date)" >> new_images_failed.log; continue; }
+            docker tag "$image" "$image_with_latest" || { echo "$image (Tag Latest)" >> new_images_failed.log; continue; }
+
+            # 5. 推送 (先推日期，成功后推Latest)
+            push_ok=0
+            if docker push "$image_with_date"; then
+              if docker push "$image_with_latest"; then
+                echo "$image_with_latest" >> new_images_success.log
+                push_ok=1
+              fi
+            fi
+
+            if [ $push_ok -ne 1 ]; then
               echo "$image" >> new_images_failed.log
-              docker rmi "$image" "$new_image" || true
+              docker rmi "$image" "$image_with_date" "$image_with_latest" 2>/dev/null || true
               continue
             fi
 
-            docker rmi "$image" "$new_image" || true
+            # 6. 清理本地缓存
+            docker rmi "$image" "$image_with_date" "$image_with_latest" 2>/dev/null || true
 
-            # 自动删除老镜像，只保留最近10个
+            # 7. 自动删除老镜像，只保留最近10个 (排除Latest标签)
             repo="$ALIYUN_NAME_SPACE/$image_name"
+            # 获取标签列表时，过滤掉 "latest"，并按倒序排列
             tags=$(curl -s -u "$ALIYUN_REGISTRY_USER:$ALIYUN_REGISTRY_PASSWORD" \
-              "https://$ALIYUN_REGISTRY/v2/$repo/tags/list" | jq -r '.tags | sort | reverse')
+              "https://$ALIYUN_REGISTRY/v2/$repo/tags/list" | jq -r '.tags[] | select(. != "latest")' | sort -r)
+            
             count=0
             for tag in $tags; do
+              # 过滤掉 jq 可能输出的空行或非标签字符（如括号）
+              [[ "$tag" == "[" || "$tag" == "]" || -z "$tag" ]] && continue
+              
               count=$((count+1))
               if [ $count -gt 10 ]; then
                 echo "删除旧镜像: $ALIYUN_REGISTRY/$repo:$tag"
@@ -140,7 +160,7 @@ jobs:
         DURATION="${duration_min}分${duration_rem}秒"
         STATUS="${{ job.status }}"
 
-        MSG="🧱 *Docker Image Pusher任务*\n"
+        MSG="🧱 *Docker Image Pusher任务 (临时)*\n"
         MSG+="⏱️ 耗时：$DURATION\n"
         MSG+="📅 时间：$(TZ='Asia/Shanghai' date "+%Y-%m-%d %H:%M:%S")\n"
         MSG+="✅ 状态：$STATUS\n\n"
