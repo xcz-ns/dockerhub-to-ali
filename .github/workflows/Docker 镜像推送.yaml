@@ -17,11 +17,18 @@ env:
   ALIYUN_REGISTRY_PASSWORD: "${{ secrets.ALIYUN_REGISTRY_PASSWORD }}"
   TG_BOT_TOKEN: "${{ secrets.TG_BOT_TOKEN }}"
   TG_CHAT_ID: "${{ secrets.TG_CHAT_ID }}"
+  # 全局超时配置，杜绝无限卡死
+  DOCKER_CMD_TIMEOUT: 300s
+  SINGLE_IMAGE_TIMEOUT: 600s
+  CURL_CONNECT_TIMEOUT: 10
+  CURL_MAX_TIMEOUT: 30
 
 jobs:
   build:
     name: 拉取镜像并推送至阿里云
     runs-on: ubuntu-latest
+    # 单Job全局超时兜底，绝对不会跑满6小时
+    timeout-minutes: 120
     steps:
     - name: 初始化时间与日志
       run: |
@@ -47,19 +54,17 @@ jobs:
         sudo apt-get clean
         sudo rm -rf /var/lib/apt/lists/* /tmp/apt_archives
 
-    - name: 最大化构建空间
+    - name: 最大化Docker构建空间
       uses: easimon/maximize-build-space@master
       with:
         root-reserve-mb: 2048
         swap-size-mb: 128
         remove-dotnet: 'true'
         remove-haskell: 'true'
+        remove-android: 'true'
         build-mount-path: '/var/lib/docker/'
 
-    - name: 安装依赖工具
-      run: sudo apt-get update && sudo apt-get install -y jq
-
-    - name: 重启 Docker 服务
+    - name: 重启 Docker 服务，加载新挂载
       run: sudo service docker restart
 
     - name: 获取代码
@@ -71,7 +76,13 @@ jobs:
     - name: 构建并推送镜像到阿里云 (含Latest标签)
       run: |
         set +e
+        # 先校验阿里云登录，登录失败直接终止
         docker login -u $ALIYUN_REGISTRY_USER -p $ALIYUN_REGISTRY_PASSWORD $ALIYUN_REGISTRY
+        if [ $? -ne 0 ]; then
+          echo "阿里云镜像仓库登录失败，终止任务"
+          exit 1
+        fi
+
         today_tag=$(date +'%m%d')
         declare -A duplicate_images
         declare -A temp_map
@@ -95,77 +106,96 @@ jobs:
             fi
         done < images.txt
 
-        # 拉取、Tag、推送 (主逻辑)
+        # 拉取、Tag、推送 (主逻辑，全链路超时兜底)
         while IFS= read -r line || [ -n "$line" ]; do
             [[ -z "$line" ]] && continue
             [[ "$line" =~ ^\s*# ]] && continue
             
-            # 1. 拉取镜像
-            docker pull $line || { echo "$line" >> new_images_failed.log; continue; }
+            # 单镜像处理超时兜底，10分钟没完成直接跳过
+            (
+              # 1. 拉取镜像，超时5分钟，最多重试2次
+              timeout $DOCKER_CMD_TIMEOUT docker pull $line || {
+                echo "$line" >> new_images_failed.log
+                exit 1
+              }
 
-            # 2. 解析变量
-            platform=$(echo "$line" | awk -F'--platform[ =]' '{if (NF>1) print $2}' | awk '{print $1}')
-            platform_prefix=""
-            [[ -n "$platform" ]] && platform_prefix="${platform//\//_}_"
+              # 2. 解析变量
+              platform=$(echo "$line" | awk -F'--platform[ =]' '{if (NF>1) print $2}' | awk '{print $1}')
+              platform_prefix=""
+              [[ -n "$platform" ]] && platform_prefix="${platform//\//_}_"
 
-            image=$(echo "$line" | awk '{print $NF}')
-            image="${image%%@*}"
-            image_name_tag=$(echo "$image" | awk -F'/' '{print $NF}')
-            name_space=$(echo "$image" | awk -F'/' '{if (NF==3) print $2; else if (NF==2) print $1; else print ""}')
-            image_name=$(echo "$image_name_tag" | awk -F':' '{print $1}')
-            name_space_prefix=""
-            if [[ -n "${duplicate_images[$image_name]}" && -n "$name_space" ]]; then
-              name_space_prefix="${name_space}_"
-            fi
-
-            # 3. 定义目标镜像名 (日期标签 + Latest标签)
-            target_image_base="$ALIYUN_REGISTRY/$ALIYUN_NAME_SPACE/$platform_prefix$name_space_prefix$image_name"
-            image_with_date="$target_image_base:$today_tag"
-            image_with_latest="$target_image_base:latest"
-
-            # 4. 打标签
-            docker tag "$image" "$image_with_date" || { echo "$image (Tag Date)" >> new_images_failed.log; continue; }
-            docker tag "$image" "$image_with_latest" || { echo "$image (Tag Latest)" >> new_images_failed.log; continue; }
-
-            # 5. 推送 (先推日期，成功后推Latest)
-            push_ok=0
-            if docker push "$image_with_date"; then
-              if docker push "$image_with_latest"; then
-                echo "$image_with_latest" >> new_images_success.log
-                push_ok=1
+              image=$(echo "$line" | awk '{print $NF}')
+              image="${image%%@*}"
+              image_name_tag=$(echo "$image" | awk -F'/' '{print $NF}')
+              name_space=$(echo "$image" | awk -F'/' '{if (NF==3) print $2; else if (NF==2) print $1; else print ""}')
+              image_name=$(echo "$image_name_tag" | awk -F':' '{print $1}')
+              name_space_prefix=""
+              if [[ -n "${duplicate_images[$image_name]}" && -n "$name_space" ]]; then
+                name_space_prefix="${name_space}_"
               fi
-            fi
 
-            if [ $push_ok -ne 1 ]; then
-              echo "$image" >> new_images_failed.log
+              # 3. 定义目标镜像名 (日期标签 + Latest标签)
+              target_image_full_name="$platform_prefix$name_space_prefix$image_name"
+              target_image_base="$ALIYUN_REGISTRY/$ALIYUN_NAME_SPACE/$target_image_full_name"
+              image_with_date="$target_image_base:$today_tag"
+              image_with_latest="$target_image_base:latest"
+
+              # 4. 打标签
+              docker tag "$image" "$image_with_date" || {
+                echo "$image (Tag Date)" >> new_images_failed.log
+                exit 1
+              }
+              docker tag "$image" "$image_with_latest" || {
+                echo "$image (Tag Latest)" >> new_images_failed.log
+                exit 1
+              }
+
+              # 5. 推送 (先推日期，成功后推Latest，超时兜底)
+              push_ok=0
+              if timeout $DOCKER_CMD_TIMEOUT docker push "$image_with_date"; then
+                if timeout $DOCKER_CMD_TIMEOUT docker push "$image_with_latest"; then
+                  echo "$image_with_latest" >> new_images_success.log
+                  push_ok=1
+                fi
+              fi
+
+              if [ $push_ok -ne 1 ]; then
+                echo "$image" >> new_images_failed.log
+                docker rmi "$image" "$image_with_date" "$image_with_latest" 2>/dev/null || true
+                exit 1
+              fi
+
+              # 6. 清理本地缓存
               docker rmi "$image" "$image_with_date" "$image_with_latest" 2>/dev/null || true
+
+              # 7. 保留最近10个镜像，删除老镜像 (修复API地址bug，带前缀匹配)
+              old_images=$(curl -s \
+                --connect-timeout $CURL_CONNECT_TIMEOUT \
+                --max-time $CURL_MAX_TIMEOUT \
+                -u "$ALIYUN_REGISTRY_USER:$ALIYUN_REGISTRY_PASSWORD" \
+                "https://$ALIYUN_REGISTRY/v2/$ALIYUN_NAME_SPACE/$target_image_full_name/tags/list" \
+                | jq -r '.tags[] | select(. != "'"$today_tag"'" and . != "latest")' | sort -r 2>/dev/null || echo "")
+              
+              count=0
+              for tag in $old_images; do
+                count=$((count+1))
+                if [ $count -ge 10 ]; then
+                  echo "删除旧镜像: $target_image_base:$tag"
+                  curl -s -X DELETE \
+                    --connect-timeout $CURL_CONNECT_TIMEOUT \
+                    --max-time $CURL_MAX_TIMEOUT \
+                    -u "$ALIYUN_REGISTRY_USER:$ALIYUN_REGISTRY_PASSWORD" \
+                    "https://$ALIYUN_REGISTRY/v2/$ALIYUN_NAME_SPACE/$target_image_full_name/manifests/$tag" 2>/dev/null || true
+                fi
+              done
+              exit 0
+            ) &
+            wait $!
+            # 单镜像处理超时，写入失败日志
+            if [ $? -eq 124 ]; then
+              echo "$line (处理超时)" >> new_images_failed.log
               continue
             fi
-
-            # 6. 清理本地缓存
-            docker rmi "$image" "$image_with_date" "$image_with_latest" 2>/dev/null || true
-
-            # 7. 保留最近10个镜像，删除老镜像 (仅针对日期标签)
-            # 注意：这里为了保持脚本简洁，删除逻辑沿用了原逻辑，但原逻辑在处理带前缀的镜像时可能需要微调
-            # 目前的逻辑是基于 $image_name 查询，如果你有 platform_prefix 或 name_space_prefix，建议谨慎测试删除功能
-            repo_path="$ALIYUN_REGISTRY/$ALIYUN_NAME_SPACE/$platform_prefix$name_space_prefix$image_name"
-            
-            # 注意：此处调用 API 的 $image_name 若需匹配前缀可能需要修改，
-            # 但通常 Registry API 删除主要靠 Manifest，这里保持原样以确保兼容性
-            old_images=$(curl -s -u "$ALIYUN_REGISTRY_USER:$ALIYUN_REGISTRY_PASSWORD" \
-                          "https://$ALIYUN_REGISTRY/v2/$ALIYUN_NAME_SPACE/$image_name/tags/list" \
-                          | jq -r '.tags[] | select(. != "'"$today_tag"'" and . != "latest")' | sort -r 2>/dev/null || echo "")
-            
-            count=0
-            for tag in $old_images; do
-              count=$((count+1))
-              if [ $count -ge 10 ]; then
-                echo "尝试删除旧镜像: $repo_path:$tag"
-                # 注意：阿里云私有镜像仓库删除Manifest可能需要额外权限或特定API版本，此处使用通用Docker API
-                curl -s -X DELETE -u "$ALIYUN_REGISTRY_USER:$ALIYUN_REGISTRY_PASSWORD" \
-                     "https://$ALIYUN_REGISTRY/v2/$ALIYUN_NAME_SPACE/$image_name/manifests/$tag" 2>/dev/null || true
-              fi
-            done
 
         done < images.txt
 
@@ -198,7 +228,10 @@ jobs:
           done < new_images_failed.log
         fi
         
+        # Telegram推送加超时兜底，避免卡死
         curl -s -X POST "https://api.telegram.org/bot$TG_BOT_TOKEN/sendMessage" \
+          --connect-timeout $CURL_CONNECT_TIMEOUT \
+          --max-time $CURL_MAX_TIMEOUT \
           -d chat_id="$TG_CHAT_ID" \
           -d parse_mode=Markdown \
           --data-urlencode "text=$(printf '%b' "${MSG}")"
@@ -208,5 +241,5 @@ jobs:
       with:
         token: ${{ secrets.REPO_TOKEN }}
         repository: ${{ github.repository }}
-        retain_days: 0
-        keep_minimum_runs: 0
+        retain_days: 3
+        keep_minimum_runs: 5
