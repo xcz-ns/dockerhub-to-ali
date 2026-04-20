@@ -32,6 +32,13 @@ jobs:
     - name: 清理磁盘空间前的状态
       run: df -hT
 
+    - name: 安装依赖工具（零空间残留优化版）
+      run: |
+        sudo apt-get update -o Dir::Cache::Archives=/tmp/apt_archives --no-install-recommends
+        sudo apt-get install -y --no-install-recommends jq
+        sudo apt-get clean
+        sudo rm -rf /var/lib/apt/lists/* /tmp/apt_archives
+
     - name: 最大化构建空间
       uses: easimon/maximize-build-space@master
       with:
